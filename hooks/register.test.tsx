@@ -148,7 +148,7 @@ describe('token-chart', () => {
 
     const ui = await mountPane($, 'terminal')
     expect(await ui.find({ type: 'Text', text: /LIMITE 5 ORE/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /stima iniziale/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /valori iniziali/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -520,10 +520,45 @@ describe('token-chart', () => {
     expect(r.text).toContain('n=2')
   })
 
-  test('la stima dichiara la sua affidabilità e quanti punti servono per ±5%', async ($: any, on: any) => {
+  test('senza dati non promette nessuna precisione e lo dice', async ($: any, on: any) => {
     setup(on)
     const r = await $.command.run({ command: 'token-chart' })
-    expect(r.text).toMatch(/affidabilità della stima: ±\d+%/)
-    expect(r.text).toContain('per ±5% servono circa 303')
+    expect(r.text).toContain('nessuna misura tua ancora: valori iniziali, errore non noto')
+    expect(r.text).not.toContain('±5%')
+    expect(r.text).not.toContain('servono circa')
+    expect(r.text).toContain('Sonnet iniziale')
+  })
+
+  test("con abbastanza misure mostra l'errore su dati nuovi, non quello sui dati già visti soltanto", async ($: any, on: any) => {
+    const world = { perPoint: 90000, scale: { 'claude-sonnet-5-5': 1, 'claude-opus-5-5': 1.5, 'claude-haiku-5-5': 0.07 }, cache: 0.03 }
+    const sim = simulator($, on, world, 31)
+    await sim.start()
+    await sim.run(40)
+    expect(await sim.report()).toContain('errore su dati nuovi: n/d, servono almeno 60 misure')
+    await sim.run(60)
+    const r = await sim.report()
+    const typical = num(r, /errore su dati nuovi: tipico ±(\d+)%/)
+    const worst = num(r, /peggiore (\d+)% sui 20 passaggi/)
+    // dati simulati puliti: l'errore su 20 punti resta vicino al limite della risoluzione intera
+    expect(typical).toBeLessThan(10)
+    expect(worst).toBeGreaterThanOrEqual(typical)
+    expect(r).toContain('sui dati già visti ±')
+    expect(r).not.toContain('servono circa')
+  })
+
+  test('dice da dove viene il peso di ogni modello: misurato, dedotto o mai visto', async ($: any, on: any) => {
+    // si usa solo Opus: Sonnet e Haiku non sono misurati con i dati dell'utente
+    const world = { perPoint: 70000, scale: { 'claude-opus-5-5': 1.5, 'claude-fable-5-1': 3 }, cache: 0.03 }
+    const sim = simulator($, on, world, 8)
+    await sim.start()
+    await sim.run(30)
+    const r = await sim.report()
+    expect(r).toMatch(/Opus misurato \d+/)
+    expect(r).toContain('Sonnet dedotto')
+    expect(r).toContain('Haiku dedotto')
+    const ui = await mountPane($, 'terminal')
+    expect(await ui.find({ type: 'Text', text: /non misurato: dedotto dagli altri modelli/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /non misurato con i tuoi dati/ })).toBeDefined()
+    await ui.unmount()
   })
 })

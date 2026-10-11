@@ -176,17 +176,28 @@ const solveParams = (list: Interval[], fixedW: number | null): Params => {
 // from claude.ai, another computer or another tool) are left out of a second pass. The spread is
 // the 95% error of the size of a point, from how far the crossings scatter around the fit; the
 // drift compares the last DRIFT_K crossings with what the fit predicts for them.
+type Oos = { typical: number; worst: number; windows: number }
 type Fit = Params & {
   n: number
   used: number
   spread: number | null
   drift: number | null
   driftBand: number | null
+  // How many crossings each family took a real part in (a quarter or more of the points): what the
+  // data says about its weight; a family with none has a weight deduced from the others.
+  evidence: Record<string, number>
+  // How wrong the weights fitted on the crossings before were on the BT_WINDOW crossings that followed.
+  oos: Oos | null
 }
 const IV_KEEP = 600
 const DRIFT_K = 10
 const DRIFT_MIN_N = 30
-const SPREAD0 = 87 // measured on the first 19 crossings of one account, before a fit has its own
+const EVIDENCE_OK = 8
+// The limit is read as a whole number, so a stretch of N crossings is known to about 1/N: 20 keeps
+// that floor near 5% (and 2.5% on average), where 10 would leave it at 10%.
+const BT_WINDOW = 20
+const BT_MIN_TRAIN = 20
+const BT_RECENT = 6
 
 const priorFit = (w: number | null): Fit => ({
   s: 1 / PRIOR_POINT,
@@ -197,7 +208,29 @@ const priorFit = (w: number | null): Fit => ({
   spread: null,
   drift: null,
   driftBand: null,
+  evidence: {},
+  oos: null,
 })
+
+// The error on data the fit has not seen: the weights fitted on the crossings up to some point
+// predict the points of the next BT_WINDOW crossings, and the prediction is compared with the limit.
+// Only the latest windows count, so the figure describes how the fit does now, not when it knew less.
+const backtest = (kept: Interval[], fixedW: number | null): Oos | null => {
+  if (kept.length < BT_MIN_TRAIN + BT_WINDOW * 2) return null
+  const last = kept.length - BT_WINDOW
+  const step = Math.max(Math.floor(BT_WINDOW / 2), Math.floor((last - BT_MIN_TRAIN) / (BT_RECENT + 4)))
+  const errs: number[] = []
+  for (let k = last; k >= BT_MIN_TRAIN && errs.length < BT_RECENT; k -= step) {
+    const fit = solveParams(kept.slice(0, k), fixedW)
+    const test = kept.slice(k, k + BT_WINDOW)
+    const actual = test.reduce((a, iv) => a + iv.dp, 0)
+    const predicted = test.reduce((a, iv) => a + pointsFor(iv.x, fit), 0)
+    if (actual > 0) errs.push(Math.abs(predicted - actual) / actual)
+  }
+  if (errs.length < 3) return null
+
+  return { typical: median(errs) * 100, worst: Math.max(...errs) * 100, windows: errs.length }
+}
 
 const fitOf = (all: Interval[], fixedW: number | null): Fit => {
   if (all.length === 0) return priorFit(fixedW)
@@ -232,18 +265,20 @@ const fitOf = (all: Interval[], fixedW: number | null): Fit => {
     }
   }
 
-  return { ...p, n: all.length, used: kept.length, spread, drift, driftBand }
+  const evidence: Record<string, number> = {}
+  for (const iv of kept) {
+    const part = Object.entries(iv.x).map(([fam, [b, c]]) => [fam, pointsFor({ [fam]: [b, c] }, p)] as const)
+    const total = part.reduce((a, [, v]) => a + v, 0)
+    for (const [fam, v] of part) if (total > 0 && v / total >= 0.25) evidence[fam] = (evidence[fam] ?? 0) + 1
+  }
+
+  return { ...p, n: all.length, used: kept.length, spread, drift, driftBand, evidence, oos: backtest(kept, fixedW) }
 }
 
 let FIT: Fit = priorFit(null)
 const thetaOf = (fam: string) => FIT.s * (RATIO0[fam] ?? 1) * (FIT.r[fam] ?? 1)
 const pointsOfTurn = (t: Turn, w: number) =>
   thetaOf(familyOf(t.model)) * (t.input + 5 * t.output + 1.25 * t.cacheWrite + w * t.cacheRead)
-const spreadNow = () => Math.round(FIT.spread ?? Math.min(100, SPREAD0 / Math.sqrt(Math.max(1, FIT.n))))
-const needFor = (target: number) =>
-  FIT.spread !== null && FIT.used > 0
-    ? Math.max(FIT.used, Math.ceil(FIT.used * (FIT.spread / target) ** 2))
-    : Math.ceil((SPREAD0 / target) ** 2)
 const isDriftAlarm = () =>
   FIT.drift !== null && FIT.driftBand !== null && Math.abs(FIT.drift * 100) > FIT.driftBand
 
@@ -326,7 +361,25 @@ const TEXT = {
     driftNone: 'variazione recente: n/d, servono almeno',
     driftChange: 'CAMBIO PROBABILE (consumo diverso dal previsto)',
     driftNoise: 'nella norma',
-    needFor5: 'per ±5% servono circa',
+    originHead: 'da dove viene il valore di ogni modello:',
+    originInitial: 'valori iniziali (misurati su un piano Pro)',
+    originMeasured: 'misurato con i tuoi dati',
+    originFew: 'poco misurato',
+    originDerived: 'non misurato: dedotto dagli altri modelli col rapporto iniziale',
+    originNew: 'mai misurato: peso provvisorio uguale a Sonnet',
+    originShort: 'origine dei pesi',
+    shortMeasured: 'misurato',
+    shortFew: 'poco misurato',
+    shortDerived: 'dedotto',
+    shortInitial: 'iniziale',
+    notMeasuredNote: '* non misurato con i tuoi dati: la stima è meno sicura',
+    oosTypical: 'errore su dati nuovi: tipico',
+    oosWorst: 'peggiore',
+    oosOver: 'sui',
+    oosNone: 'errore su dati nuovi: n/d, servono almeno',
+    oosNote: 'previsione dei punti successivi con i pesi calcolati prima',
+    inSample: 'sui dati già visti',
+    initialAccuracy: 'nessuna misura tua ancora: valori iniziali, errore non noto',
     points: 'passaggi di punto',
     dropped: 'scartati',
     droppedWhy: 'passaggi scartati perché lontani dal resto (consumo fuori da questa installazione: claude.ai, altro PC, altro strumento?)',
@@ -425,7 +478,25 @@ const TEXT = {
     driftNone: 'recent change: n/a, needs at least',
     driftChange: 'LIKELY CHANGE (usage differs from what was learned)',
     driftNoise: 'within noise',
-    needFor5: 'for ±5% about',
+    originHead: 'where each model\'s value comes from:',
+    originInitial: 'starting values (measured on a Pro plan)',
+    originMeasured: 'measured with your data',
+    originFew: 'barely measured',
+    originDerived: 'not measured: deduced from the other models with the starting ratio',
+    originNew: 'never measured: provisional weight equal to Sonnet',
+    originShort: 'where the weights come from',
+    shortMeasured: 'measured',
+    shortFew: 'barely measured',
+    shortDerived: 'deduced',
+    shortInitial: 'initial',
+    notMeasuredNote: '* not measured with your data: the estimate is less sure',
+    oosTypical: 'error on new data: typical',
+    oosWorst: 'worst',
+    oosOver: 'over',
+    oosNone: 'error on new data: n/a, needs at least',
+    oosNote: 'prediction of the following points with the weights fitted before',
+    inSample: 'on the data already seen',
+    initialAccuracy: 'none of your own crossings yet: starting values, error unknown',
     points: 'point crossings are needed',
     dropped: 'left out',
     droppedWhy: 'crossings left out as far from the rest (usage outside this install: claude.ai, another computer, another tool?)',
@@ -463,8 +534,48 @@ const driftText = () => {
 
   return `${t('drift')} ${signed(FIT.drift)} · ${verdict} (±${Math.round(FIT.driftBand)}%)`
 }
-const reliabilityText = () =>
-  `±${spreadNow()}% · n=${FIT.n}/${needFor(5)}${FIT.used < FIT.n ? ` · ${t('dropped')} ${FIT.n - FIT.used}` : ''}`
+// How sure the figures are: the error on data the fit has not seen, and the scatter on the data it has.
+const accuracyText = () => {
+  const o = FIT.oos
+  if (FIT.n === 0) return t('initialAccuracy')
+  if (!o) return `${t('oosNone')} ${BT_MIN_TRAIN + BT_WINDOW * 2} ${t('measures')} (n=${FIT.n})`
+
+  return `${t('oosTypical')} ±${Math.round(o.typical)}% · ${t('oosWorst')} ${Math.round(o.worst)}% ${t('oosOver')} ${BT_WINDOW} ${t('points')}`
+}
+const seenText = () =>
+  `${FIT.n} ${t('measures')}${FIT.used < FIT.n ? ` · ${t('dropped')} ${FIT.n - FIT.used}` : ''}${
+    FIT.spread === null ? '' : ` · ${t('inSample')} ±${Math.round(FIT.spread)}%`
+  }`
+
+// Where one family's weight comes from: the data, or the starting values and the other families.
+type Origin = { kind: 'initial' | 'measured' | 'few' | 'derived' | 'new'; n: number }
+const originOf = (fam: string): Origin => {
+  const n = FIT.evidence[fam] ?? 0
+  if (FIT.n === 0) return { kind: 'initial', n }
+  if (n >= EVIDENCE_OK) return { kind: 'measured', n }
+  if (n > 0) return { kind: 'few', n }
+
+  return { kind: fam in RATIO0 ? 'derived' : 'new', n }
+}
+const originText = (fam: string) => {
+  const o = originOf(fam)
+  if (o.kind === 'measured') return `${t('originMeasured')} (${o.n} ${t('points')})`
+  if (o.kind === 'few') return `${t('originFew')} (${o.n} ${t('points')})`
+
+  return o.kind === 'initial' ? t('originInitial') : o.kind === 'derived' ? t('originDerived') : t('originNew')
+}
+const originShort = (fam: string) => {
+  const o = originOf(fam)
+
+  return o.kind === 'measured'
+    ? `${t('shortMeasured')} ${o.n}`
+    : o.kind === 'few'
+      ? `${t('shortFew')} ${o.n}`
+      : o.kind === 'initial'
+        ? t('shortInitial')
+        : t('shortDerived')
+}
+const isMeasured = (fam: string) => originOf(fam).kind === 'measured'
 const fmtW = (w: number) => String(Number(w.toFixed(3)))
 
 const CHART_ROWS = 4
@@ -945,7 +1056,11 @@ export const register: Register = (on, options) => {
         `${t('spent')}: ${money(spent)}`,
         `${t('cacheShare')}: ${fmtW(weight)} (${cacheShare(list, weight)}%)`,
         `${t('learned')}: ${weightsText(list)}`,
-        `${t('reliability')}: ±${spreadNow()}% · ${t('needFor5')} ${needFor(5)} ${t('points')}`,
+        accuracyText(),
+        seenText(),
+        `${t('originShort')}: ${[...new Set([...bd.fams.map(f => f.fam), 'opus', 'sonnet', 'haiku'])]
+          .map(f => `${familyName(f)} ${originShort(f)}`)
+          .join(' · ')}`,
         ...(FIT.used < FIT.n ? [`${FIT.n - FIT.used} ${t('droppedWhy')}`] : []),
         driftText(),
         estimateText(list),
@@ -1187,12 +1302,13 @@ export const register: Register = (on, options) => {
               {left.rows.map(r =>
                 tableRow(
                   `left-${r.fam}`,
-                  [r.label, compact(r.weighted), fmtTimes(r.vsSonnet), r.calls === null ? '—' : `~${compact(r.calls)}`],
+                  [`${r.label}${isMeasured(r.fam) ? '' : ' *'}`, compact(r.weighted), fmtTimes(r.vsSonnet), r.calls === null ? '—' : `~${compact(r.calls)}`],
                   false,
                   undefined,
-                  pickable(`pick-left-${r.fam}`, r.fam, r.label),
+                  pickable(`pick-left-${r.fam}`, r.fam, `${r.label}${isMeasured(r.fam) ? '' : ' *'}`),
                 ),
               )}
+              {left.rows.some(r => !isMeasured(r.fam)) && <Text dimColor>{t('notMeasuredNote')}</Text>}
               {left.per > 0 && <Text>{sameWorkText(left)}</Text>}
               <Text color="claude">{t('advice')}</Text>
               <Text dimColor>{t('leftNote')}</Text>
@@ -1235,6 +1351,7 @@ export const register: Register = (on, options) => {
                 1% = {compact(1 / detail.th)} {t('weightedOf')} {familyName(detail.fam)} · {t('leftIn')} {fmtPct(left?.rem ?? 0)} ≈{' '}
                 {compact((left?.rem ?? 0) / detail.th)}
               </Text>
+              <Text dimColor>{originText(detail.fam)}</Text>
             </Box>
           </Box>
         )}
@@ -1285,14 +1402,19 @@ export const register: Register = (on, options) => {
             {families.map(f =>
               tableRow(f, [`■ ${familyName(f)}`, compact(1 / thetaOf(f)), compact(100 / thetaOf(f))], false, FAMILIES[f] ?? 'suggestion'),
             )}
-            {FIT.n === 0 ? (
-              <Text dimColor>{t('prior')}: {t('priorShort')}</Text>
-            ) : (
-              <Text dimColor>
-                {t('precision')} ±{spreadNow()}% · {FIT.n} {t('measures')}
-                {FIT.used < FIT.n ? ` · ${t('dropped')} ${FIT.n - FIT.used}` : ''}
-              </Text>
-            )}
+            <Box flexDirection="column" marginTop={1}>
+              <Text dimColor>{t('originHead')}</Text>
+              {families.map(f => (
+                <Text key={`origin-${f}`}>
+                  <Text color={famColor(f)}>■ {familyName(f)}</Text> <Text dimColor>{originText(f)}</Text>
+                </Text>
+              ))}
+            </Box>
+            <Box flexDirection="column" marginTop={1}>
+              <Text bold={FIT.oos !== null}>{accuracyText()}</Text>
+              {FIT.n > 0 && <Text dimColor>({t('oosNote')})</Text>}
+              {FIT.n > 0 && <Text dimColor>{seenText()}</Text>}
+            </Box>
             {FIT.drift === null || FIT.driftBand === null ? (
               <Text dimColor>
                 {t('driftWait')} {DRIFT_MIN_N} {t('measures')} ({FIT.n}/{DRIFT_MIN_N})

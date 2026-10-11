@@ -10,7 +10,7 @@ The panel is built so you can check the arithmetic yourself:
 - **What it is made of** – a table of the calls in the window: for output, cache written, input and cache read, the tokens, their weight (×5, ×1.25, ×1, ×0.03) and the weighted tokens; then `weighted total ÷ tokens per 1% = % seen`, `+ not seen`, `= 5-hour limit`. Below it, each model with its weighted tokens and its share.
 - **What you have left** – a quick guide to which model is worth using. For Opus, Sonnet, Haiku and any other model seen, cheapest first: what is left of the 5-hour limit in weighted tokens, how many times Sonnet's calls that model gives (`×Sonnet`), and in calls like your average one in this window. The average call is the same for every model, so the models are compared on the same work and only their weights tell them apart (Opus always gives fewer calls than Sonnet, Haiku many more). A line says it in words (`On the same work: Haiku ×14 Sonnet's calls · Opus ×0.7`), followed by a rule of thumb on which model to use.
 - **Detail of a model** – press a model's name (in the bar's legend, in the tables, or in "what you have left") and a card opens with that model alone: its output, cache written, input and cache read, each with its tokens, weight, weighted tokens and share of the limit, and what 1% and what is left are worth in its tokens. Press it again, or "close", to shut it.
-- **How it is worked out** – for Opus, Sonnet, Haiku and any other model seen, what 1% and the whole window are worth in weighted tokens; the precision (±%, how many crossings) and whether the limits look steady.
+- **How it is worked out** – for Opus, Sonnet, Haiku and any other model seen, what 1% and the whole window are worth in weighted tokens; where each model's value comes from, how big the error is on new data, and whether the limits look steady.
 - **Week** (and a gateway's spend limit) – a bar with the percentage and the reset.
 - **Calls** – a bar chart of the calls in the window, each bar's height in % of the limit and its colour the model that weighed most; the last call, how many calls, and the session cost.
 
@@ -90,9 +90,18 @@ Changing and reloading any mod rewrites the prompt cache of the session once, wh
 
 ### How close to the truth
 
-The panel shows `estimate reliability ±x% · n=…/…`: the 95% error of the size of a point, worked out from how far your own crossings scatter around the fit, and how many crossings it would take to reach ±5%. Before there are enough crossings to work it out, it falls back to what one account measured (about ±20% after 19 crossings). The limit is reported as a whole number, which alone makes each crossing uncertain by about half a point: that is why it takes dozens of crossings, not a handful, to get close.
+No number is promised: the weights are not published, they are inferred, and how well they predict depends on your plan, your models and how much you use Claude elsewhere. The panel measures it on your own data instead, with two figures that mean different things:
 
-The figure assumes the weights do not change. Anthropic can change them without notice; then the oldest crossings go stale, and the margin is optimistic until newer ones replace them, which is what the next line is for.
+- **Error on new data** (`typical ±5% · worst 11% over 20 crossings`): the weights fitted on the crossings up to some point predict the points of the next 20 crossings, and the prediction is compared with what the limit did. It is the honest figure, because the data being predicted was not used to fit. It is computed on the latest stretches only, so it describes the fit as it is now, and it needs 60 crossings before it appears. Stretches of 20 crossings are used because the limit is read as a whole number: a shorter stretch cannot be known better than about 1/N, so 10 crossings would leave the floor at 10%.
+- **On the data already seen** (`±5%`): how far the crossings scatter around the fit. It always looks better than the error on new data and says nothing about it; it is shown for comparison.
+
+A figure of 2%, or any small one, is reached only by counting over whole 5-hour windows (one window is 100 points, known to about 1%), and it is a claim about one account over the windows measured, not about the tool. To make that claim for yours, use Claude Code alone for several full windows (nothing on claude.ai, no other computer), then compare, for each window, the percentage the panel's "seen" line predicted with the one the limit reached, fitting the weights on the other windows. Quote the numbers you measured and the number of windows, not a promise.
+
+What does not shrink with more data: usage the mod does not see (left out when it is large, hidden in the noise when small), modes priced differently under the same model name (fast mode, contexts over 200k tokens, a one-hour cache), and Anthropic changing the weights. The next line is for the last one.
+
+### Where each model's value comes from
+
+Under "how it is worked out" and in the summary, each model says how its weight was obtained: `measured with your data (52 crossings)` when the model took a real part (a quarter or more of the points) in at least 8 crossings, `barely measured` below that, `not measured: deduced from the other models with the starting ratio` when no crossing involved it (its value then rests on the starting ratio and on the other models' data), and `never measured` for a model the mod had no starting ratio for (provisional weight equal to Sonnet's). A model that is not measured is marked `*` in "what you have left": read its figures as less sure than the others'.
 
 ### Has something changed?
 
