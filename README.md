@@ -42,7 +42,7 @@ or put the path in `CLAUDE_CODE_PLUGIN_DIRS`.
 
 Every call of a model family is counted as `input + 5 x output + 1.25 x cache written + w x cache read`, and each family has its own weight on the limit. `w` is the **cache-read weight**; the panel shows how much of your consumption comes from re-reading the cache.
 
-The mod starts from values measured on one account (Max plan, October 2026: identical jobs on each model, the limit read at each whole-point crossing):
+The mod starts from values measured on one account (Pro plan, October 2026: identical jobs on each model, the limit read at each whole-point crossing):
 
 | | Starting value | 95% range on that account |
 | --- | --- | --- |
