@@ -329,12 +329,36 @@ describe('token-chart', () => {
     const r = await $.command.run({ command: 'token-chart' })
     // Sonnet: 60 x 108k = 6.5M pesati, 1.3M se fosse tutto output; Opus pesa 1.5x, Haiku 0.07x
     expect(r.text).toContain('Quanto ti resta (60% del limite)')
-    expect(r.text).toContain('Sonnet 5.5 6.5M pesati (≈ 1.3M solo output, ~60 chiamate)')
-    expect(r.text).toContain('Opus 4.3M pesati')
-    expect(r.text).toContain('Haiku 92.6M pesati')
+    expect(r.text).toContain('Sonnet 5.5 6.5M pesati (≈ 1.3M solo output, ~60 chiamate, ×1.0 Sonnet)')
+    // la stessa chiamata media (108k pesati) per tutti: Opus 4.3M / 108k = 40, Haiku 92.6M / 108k = 857
+    expect(r.text).toContain('Opus 4.3M pesati (≈ 864.0k solo output, ~40 chiamate, ×0.7 Sonnet)')
+    expect(r.text).toContain('Haiku 92.6M pesati (≈ 18.5M solo output, ~857 chiamate, ×14 Sonnet)')
+    expect(r.text).toContain('A parità di lavoro (chiamata media 108.0k pesati): Haiku ×14 le chiamate di Sonnet · Opus ×0.7 le chiamate di Sonnet')
+    expect(r.text).toContain('Conviene: Haiku per compiti semplici')
     const ui = await mountPane($, 'terminal')
     expect(await ui.find({ type: 'Text', text: /QUANTO TI RESTA/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /A parità di lavoro/ })).toBeDefined()
     await ui.unmount()
+  })
+
+  test('a parità di lavoro Opus dà sempre meno chiamate di Sonnet, anche se le tue chiamate Opus erano piccole', async ($: any, on: any) => {
+    const play = setup(on)
+    on('session.measure', (_: any, e: any) => ({ changed: e.changed }))
+    const resetsAt = new Date(3 * 3600 * 1000).toISOString()
+    // una chiamata Sonnet grande e dieci chiamate Opus piccole
+    await play($, usage('claude-sonnet-5-5', 100000, 0, 0, 0))
+    for (let i = 0; i < 10; i++) await play($, usage('claude-opus-5-5', 2000, 0, 0, 0))
+    await $.session.measure({ context: {}, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt }], changed: ['rateLimits'] })
+    const text = (await $.command.run({ command: 'token-chart' })).text as string
+    const callsOf = (name: string) => {
+      const m = new RegExp(`${name}(?: 5\\.5)? [^(]*\\(≈ [^,]*, ~([0-9.]+)(k?) chiamate`).exec(text) ?? []
+
+      return Number(m[1]) * (m[2] === 'k' ? 1000 : 1)
+    }
+    expect(callsOf('Opus')).toBeLessThan(callsOf('Sonnet'))
+    expect(callsOf('Haiku')).toBeGreaterThan(callsOf('Sonnet'))
+    // il rapporto è quello dei pesi: Opus 1.5 volte Sonnet
+    expect(Math.abs(callsOf('Sonnet') / callsOf('Opus') - 1.5)).toBeLessThan(0.02)
   })
 
   for (const surface of ['terminal', 'desktop'] as const) {

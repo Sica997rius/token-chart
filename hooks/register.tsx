@@ -281,7 +281,12 @@ const TEXT = {
     ofLimit: 'del limite',
     onlyOutput: 'solo output',
     colCalls: 'chiamate',
-    leftNote: 'pesati = input ×1, output ×5, cache scritta ×1,25, cache letta ×0,03 · solo output = se tutto fosse output · chiamate = al costo medio delle tue in questa finestra',
+    colVs: '×Sonnet',
+    sameWork: 'A parità di lavoro',
+    avgCall: 'chiamata media',
+    callsOfSonnet: 'le chiamate di Sonnet',
+    advice: 'Conviene: Haiku per compiti semplici e ripetitivi, Sonnet per il lavoro normale, Opus solo quando serve più ragionamento.',
+    leftNote: 'pesati = input ×1, output ×5, cache scritta ×1,25, cache letta ×0,03 · chiamate = quante chiamate come la tua media di questa finestra, uguale per tutti i modelli · ×Sonnet = quante volte le chiamate di Sonnet',
     detailHead: '◆ DETTAGLIO',
     close: 'chiudi',
     clickHint: 'tocca un modello per il dettaglio',
@@ -375,7 +380,12 @@ const TEXT = {
     ofLimit: 'of the limit',
     onlyOutput: 'output only',
     colCalls: 'calls',
-    leftNote: 'weighted = input ×1, output ×5, cache written ×1.25, cache read ×0.03 · output only = if it were all output · calls = at the average cost of yours in this window',
+    colVs: '×Sonnet',
+    sameWork: 'On the same work',
+    avgCall: 'average call',
+    callsOfSonnet: "Sonnet's calls",
+    advice: 'Worth it: Haiku for simple, repetitive tasks, Sonnet for everyday work, Opus only when it needs more reasoning.',
+    leftNote: 'weighted = input ×1, output ×5, cache written ×1.25, cache read ×0.03 · calls = how many calls like your average one in this window, the same for every model · ×Sonnet = how many times the calls of Sonnet',
     detailHead: '◆ DETAIL',
     close: 'close',
     clickHint: 'tap a model for its detail',
@@ -638,23 +648,46 @@ const detailOf = (list: Turn[], fam: string, w: number) => {
   return { fam, calls: mine.length, rows, weighted, points: weighted * th, th }
 }
 
-// What is left of the limit, in each family's weighted tokens, in output tokens, and in calls at
-// the average cost of that family's calls in this window.
-const leftOf = (percentUsed: number, fams: FamilySum[]) => {
+// What is left of the limit, in each family's weighted tokens, in output tokens, and in calls.
+// The calls are counted with one and the same call for every family, the average of all the calls
+// in this window whatever their model: the column then compares the models on the same work, and
+// only their weights tell them apart (each family's own average would mix in how it was used).
+const leftOf = (percentUsed: number, fams: FamilySum[], list: Turn[], w: number) => {
   const rem = Math.max(0, 100 - percentUsed)
   const names = [...new Set([...fams.map(f => f.fam), 'opus', 'sonnet', 'haiku'])]
+  const per = list.length
+    ? list.reduce((a, x) => a + x.input + 5 * x.output + 1.25 * x.cacheWrite + w * x.cacheRead, 0) / list.length
+    : 0
 
   return {
     rem,
-    rows: names.map(fam => {
-      const used = fams.find(f => f.fam === fam)
-      const weighted = rem / thetaOf(fam)
-      const per = used && used.calls > 0 ? used.points / used.calls : 0
+    per,
+    rows: names
+      .map(fam => {
+        const used = fams.find(f => f.fam === fam)
+        const weighted = rem / thetaOf(fam)
 
-      return { fam, label: used?.label ?? familyName(fam), weighted, output: weighted / 5, calls: per > 0 ? rem / per : null }
-    }),
+        return {
+          fam,
+          label: used?.label ?? familyName(fam),
+          weighted,
+          output: weighted / 5,
+          calls: per > 0 ? weighted / per : null,
+          vsSonnet: thetaOf('sonnet') / thetaOf(fam),
+        }
+      })
+      .sort((a, b) => b.weighted - a.weighted),
   }
 }
+
+const fmtTimes = (v: number) => `×${v >= 10 ? Math.round(v) : v.toFixed(1)}`
+
+// One line that says, on the same work, how many calls each model gives against Sonnet.
+const sameWorkText = (left: ReturnType<typeof leftOf>) =>
+  `${t('sameWork')} (${t('avgCall')} ${compact(left.per)} ${t('colWeighted')}): ${left.rows
+    .filter(r => r.fam !== 'sonnet')
+    .map(r => `${r.label} ${fmtTimes(r.vsSonnet)} ${t('callsOfSonnet')}`)
+    .join(' · ')}`
 
 const safeSet = async ($: EngineInterface, key: string, value: unknown) => {
   try {
@@ -877,15 +910,18 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const five = windows.find(w => w.kind === 'five_hour')
     const bd = breakdownOf(list, weight)
-    const how = five
+    const leftNow = five ? leftOf(five.percentUsed, bd.fams, list, weight) : null
+    const how = five && leftNow
       ? [
           `${t('howTo')} ${fmtPct(five.percentUsed)}: ${t('seen')} ${fmtPct(bd.seen)} (${bd.fams.map(m => `${m.label} ${fmtPct(m.points)}`).join(' · ')}) + ${t('unseen')} ${fmtPct(five.percentUsed - bd.seen)}`,
           `${t('madeOf')} (${t('weightedOf')} ${familyName(bd.ref)}): ${bd.rows
             .map(r => `${rowLabel(r.key)} ${compact(r.tokens)} ×${fmtW(r.weight)} = ${compact(r.weighted)}`)
             .join(' · ')} · ${t('totalWeighted')} ${compact(bd.weighted)} ÷ ${compact(bd.perPoint)} ${t('perOne')} = ${fmtPct(bd.seen)}`,
-          `${t('leftPlain')} (${fmtPct(100 - five.percentUsed)} ${t('ofLimit')}): ${leftOf(five.percentUsed, bd.fams)
-            .rows.map(r => `${r.label} ${compact(r.weighted)} ${t('colWeighted')} (≈ ${compact(r.output)} ${t('onlyOutput')}${r.calls === null ? '' : `, ~${compact(r.calls)} ${t('colCalls')}`})`)
+          `${t('leftPlain')} (${fmtPct(100 - five.percentUsed)} ${t('ofLimit')}): ${leftNow.rows
+            .map(r => `${r.label} ${compact(r.weighted)} ${t('colWeighted')} (≈ ${compact(r.output)} ${t('onlyOutput')}${r.calls === null ? '' : `, ~${compact(r.calls)} ${t('colCalls')}`}, ${fmtTimes(r.vsSonnet)} Sonnet)`)
             .join(' · ')}`,
+          ...(leftNow.per > 0 ? [sameWorkText(leftNow)] : []),
+          t('advice'),
         ]
       : []
     const lines = windows.map(
@@ -1029,7 +1065,7 @@ export const register: Register = (on, options) => {
       void update($, selected, now => (now === fam ? '' : fam))
     }
     const famColor = (fam: string) => FAMILIES[fam] ?? 'suggestion'
-    const left = five ? leftOf(five.percentUsed, bd.fams) : null
+    const left = five ? leftOf(five.percentUsed, bd.fams, list, weight) : null
     const detail = five && sel ? detailOf(list, sel, weight) : null
     const wide = inner >= 40
     const valueOf = (x: Turn) => (five ? pointsOfTurn(x, weight) : x.tokens)
@@ -1147,16 +1183,18 @@ export const register: Register = (on, options) => {
               {t('leftHead')} <Text dimColor>({fmtPct(left.rem)} {t('ofLimit')})</Text>
             </Text>
             <Box flexDirection="column" marginTop={1}>
-              {tableRow('lhead', [t('model'), t('colWeighted'), t('onlyOutput'), t('colCalls')], true)}
+              {tableRow('lhead', [t('model'), t('colWeighted'), t('colVs'), t('colCalls')], true)}
               {left.rows.map(r =>
                 tableRow(
                   `left-${r.fam}`,
-                  [r.label, compact(r.weighted), compact(r.output), r.calls === null ? '—' : `~${compact(r.calls)}`],
+                  [r.label, compact(r.weighted), fmtTimes(r.vsSonnet), r.calls === null ? '—' : `~${compact(r.calls)}`],
                   false,
                   undefined,
                   pickable(`pick-left-${r.fam}`, r.fam, r.label),
                 ),
               )}
+              {left.per > 0 && <Text>{sameWorkText(left)}</Text>}
+              <Text color="claude">{t('advice')}</Text>
               <Text dimColor>{t('leftNote')}</Text>
             </Box>
           </Box>
