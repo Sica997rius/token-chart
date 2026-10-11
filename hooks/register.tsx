@@ -7,6 +7,8 @@ const PANE = 'token-chart'
 const turns = atom({ plugin: 'token-chart', key: 'turns' } as const, [])
 const limits = atom({ plugin: 'token-chart', key: 'limits' } as const, [])
 const cost = atom({ plugin: 'token-chart', key: 'cost' } as const, null)
+// The family whose detail is open in the panel ('' = none).
+const selected = atom({ plugin: 'token-chart', key: 'selected' } as const, '')
 
 // Measured on one account (Pro plan, Oct 2026): one point of the 5-hour window was worth about 108k
 // "Sonnet tokens", a Sonnet token being input + 5 x output + 1.25 x cache written + w x cache read.
@@ -274,6 +276,17 @@ const TEXT = {
     used: 'consumati',
     perModel: 'per modello',
     unavailable: 'n/d',
+    leftHead: '◆ QUANTO TI RESTA',
+    leftPlain: 'Quanto ti resta',
+    ofLimit: 'del limite',
+    onlyOutput: 'solo output',
+    colCalls: 'chiamate',
+    leftNote: 'pesati = input ×1, output ×5, cache scritta ×1,25, cache letta ×0,03 · solo output = se tutto fosse output · chiamate = al costo medio delle tue in questa finestra',
+    detailHead: '◆ DETTAGLIO',
+    close: 'chiudi',
+    clickHint: 'tocca un modello per il dettaglio',
+    leftIn: 'restano',
+    noCallsOf: 'nessuna chiamata di questo modello in questa finestra',
     limit5: '◆ LIMITE 5 ORE',
     seen: 'visti dalla mod',
     model: 'modello',
@@ -357,6 +370,17 @@ const TEXT = {
     used: 'used',
     perModel: 'per model',
     unavailable: 'n/a',
+    leftHead: '◆ WHAT YOU HAVE LEFT',
+    leftPlain: 'What you have left',
+    ofLimit: 'of the limit',
+    onlyOutput: 'output only',
+    colCalls: 'calls',
+    leftNote: 'weighted = input ×1, output ×5, cache written ×1.25, cache read ×0.03 · output only = if it were all output · calls = at the average cost of yours in this window',
+    detailHead: '◆ DETAIL',
+    close: 'close',
+    clickHint: 'tap a model for its detail',
+    leftIn: 'left',
+    noCallsOf: 'no calls of this model in this window',
     limit5: '◆ 5-HOUR LIMIT',
     seen: 'seen by the mod',
     model: 'model',
@@ -560,14 +584,9 @@ type RowKey = 'output' | 'cacheWrite' | 'input' | 'cacheRead'
 const rowLabel = (key: RowKey) =>
   key === 'cacheWrite' ? t('cacheWritten') : key === 'cacheRead' ? t('cacheRead') : key
 
-// How the calls seen add up to a share of the limit, in the tokens of the family that weighs most
-// (another family's tokens are converted into it by the ratio of their weights).
-const breakdownOf = (list: Turn[], w: number) => {
-  const byModel = [...sumByModel(list, w).entries()]
-    .map(([model, o]) => ({ model, points: o.points, tokens: o.tokens }))
-    .sort((a, b) => b.points - a.points)
-  const ref = familyOf(byModel[0]?.model ?? 'sonnet')
-  const k = (x: Turn) => thetaOf(familyOf(x.model)) / thetaOf(ref)
+// The four kinds of token of a list of calls, each with its weight and its weighted total; `k`
+// converts a call's tokens into the unit of the table (1 for one family's own tokens).
+const rowsOf = (list: Turn[], w: number, k: (x: Turn) => number) => {
   const sum = (f: (x: Turn) => number) => list.reduce((a, x) => a + f(x), 0)
   const rows: { key: RowKey; tokens: number; weight: number; weighted: number }[] = [
     { key: 'output', tokens: sum(x => x.output), weight: 5, weighted: sum(x => k(x) * 5 * x.output) },
@@ -575,11 +594,66 @@ const breakdownOf = (list: Turn[], w: number) => {
     { key: 'input', tokens: sum(x => x.input), weight: 1, weighted: sum(x => k(x) * x.input) },
     { key: 'cacheRead', tokens: sum(x => x.cacheRead), weight: w, weighted: sum(x => k(x) * w * x.cacheRead) },
   ]
-  const weighted = rows.reduce((a, r) => a + r.weighted, 0)
-  const perPoint = 1 / thetaOf(ref)
-  const others = [...new Set(list.map(x => familyOf(x.model)))].filter(f => f !== ref)
 
-  return { ref, perPoint, rows, weighted, seen: weighted / perPoint, byModel, others }
+  return { rows, weighted: rows.reduce((a, r) => a + r.weighted, 0) }
+}
+
+// One entry per model family: its share of the limit, its tokens and its calls. A family used
+// through a single model is named as that model (Opus 5.5), else by the family.
+type FamilySum = { fam: string; label: string; points: number; tokens: number; calls: number }
+const byFamily = (list: Turn[], w: number): FamilySum[] => {
+  const map = new Map<string, FamilySum & { models: string[] }>()
+  for (const x of list) {
+    const fam = familyOf(x.model)
+    const o = map.get(fam) ?? { fam, label: familyName(fam), points: 0, tokens: 0, calls: 0, models: [] }
+    if (!o.models.includes(x.model)) o.models.push(x.model)
+    o.points += pointsOfTurn(x, w)
+    o.tokens += x.tokens
+    o.calls += 1
+    map.set(fam, o)
+  }
+  for (const o of map.values()) if (o.models.length === 1) o.label = nameOf(o.models[0] ?? '')
+
+  return [...map.values()].sort((a, b) => b.points - a.points)
+}
+
+// How the calls seen add up to a share of the limit, in the tokens of the family that weighs most
+// (another family's tokens are converted into it by the ratio of their weights).
+const breakdownOf = (list: Turn[], w: number) => {
+  const fams = byFamily(list, w)
+  const ref = fams[0]?.fam ?? 'sonnet'
+  const { rows, weighted } = rowsOf(list, w, x => thetaOf(familyOf(x.model)) / thetaOf(ref))
+  const perPoint = 1 / thetaOf(ref)
+  const others = fams.map(f => f.fam).filter(f => f !== ref)
+
+  return { ref, perPoint, rows, weighted, seen: weighted / perPoint, fams, others }
+}
+
+// One family on its own: its tokens in its own units, and what each kind adds to the limit.
+const detailOf = (list: Turn[], fam: string, w: number) => {
+  const mine = list.filter(x => familyOf(x.model) === fam)
+  const { rows, weighted } = rowsOf(mine, w, () => 1)
+  const th = thetaOf(fam)
+
+  return { fam, calls: mine.length, rows, weighted, points: weighted * th, th }
+}
+
+// What is left of the limit, in each family's weighted tokens, in output tokens, and in calls at
+// the average cost of that family's calls in this window.
+const leftOf = (percentUsed: number, fams: FamilySum[]) => {
+  const rem = Math.max(0, 100 - percentUsed)
+  const names = [...new Set([...fams.map(f => f.fam), 'opus', 'sonnet', 'haiku'])]
+
+  return {
+    rem,
+    rows: names.map(fam => {
+      const used = fams.find(f => f.fam === fam)
+      const weighted = rem / thetaOf(fam)
+      const per = used && used.calls > 0 ? used.points / used.calls : 0
+
+      return { fam, label: used?.label ?? familyName(fam), weighted, output: weighted / 5, calls: per > 0 ? rem / per : null }
+    }),
+  }
 }
 
 const safeSet = async ($: EngineInterface, key: string, value: unknown) => {
@@ -805,10 +879,13 @@ export const register: Register = (on, options) => {
     const bd = breakdownOf(list, weight)
     const how = five
       ? [
-          `${t('howTo')} ${fmtPct(five.percentUsed)}: ${t('seen')} ${fmtPct(bd.seen)} (${bd.byModel.map(m => `${nameOf(m.model)} ${fmtPct(m.points)}`).join(' · ')}) + ${t('unseen')} ${fmtPct(five.percentUsed - bd.seen)}`,
+          `${t('howTo')} ${fmtPct(five.percentUsed)}: ${t('seen')} ${fmtPct(bd.seen)} (${bd.fams.map(m => `${m.label} ${fmtPct(m.points)}`).join(' · ')}) + ${t('unseen')} ${fmtPct(five.percentUsed - bd.seen)}`,
           `${t('madeOf')} (${t('weightedOf')} ${familyName(bd.ref)}): ${bd.rows
             .map(r => `${rowLabel(r.key)} ${compact(r.tokens)} ×${fmtW(r.weight)} = ${compact(r.weighted)}`)
             .join(' · ')} · ${t('totalWeighted')} ${compact(bd.weighted)} ÷ ${compact(bd.perPoint)} ${t('perOne')} = ${fmtPct(bd.seen)}`,
+          `${t('leftPlain')} (${fmtPct(100 - five.percentUsed)} ${t('ofLimit')}): ${leftOf(five.percentUsed, bd.fams)
+            .rows.map(r => `${r.label} ${compact(r.weighted)} ${t('colWeighted')} (≈ ${compact(r.output)} ${t('onlyOutput')}${r.calls === null ? '' : `, ~${compact(r.calls)} ${t('colCalls')}`})`)
+            .join(' · ')}`,
         ]
       : []
     const lines = windows.map(
@@ -935,7 +1012,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const windows = await read($, limits)
     const five = windows.find(w => w.kind === 'five_hour')
     const others = windows.filter(w => w.kind !== 'five_hour')
@@ -947,15 +1024,23 @@ export const register: Register = (on, options) => {
     const barWidth = Math.max(8, inner - 6)
     const bd = breakdownOf(list, weight)
     const unseen = five ? five.percentUsed - bd.seen : 0
+    const sel = await read($, selected)
+    const pick = (fam: string) => {
+      void update($, selected, now => (now === fam ? '' : fam))
+    }
+    const famColor = (fam: string) => FAMILIES[fam] ?? 'suggestion'
+    const left = five ? leftOf(five.percentUsed, bd.fams) : null
+    const detail = five && sel ? detailOf(list, sel, weight) : null
+    const wide = inner >= 40
     const valueOf = (x: Turn) => (five ? pointsOfTurn(x, weight) : x.tokens)
     const show = (v: number) => (five ? fmtPct(v) : `${compact(v)} ${t('tokenUnit')}`)
 
     // The 5-hour bar is made of what each model took, then what the mod did not see.
     const segments: { key: string; text: string; color: string }[] = []
     let filled = 0
-    for (const m of bd.byModel) {
+    for (const m of bd.fams) {
       const n = Math.min(barWidth - filled, Math.round((m.points / 100) * barWidth))
-      if (n > 0) segments.push({ key: m.model, text: '█'.repeat(n), color: colorOf(m.model) })
+      if (n > 0) segments.push({ key: m.fam, text: '█'.repeat(n), color: famColor(m.fam) })
       filled += Math.max(0, n)
     }
     const unseenCells = five ? Math.max(0, Math.min(barWidth, Math.round((five.percentUsed / 100) * barWidth)) - filled) : 0
@@ -985,12 +1070,21 @@ export const register: Register = (on, options) => {
         <Text bold={bold}>{value}</Text>
       </Box>
     )
-    const tableRow = (key: string, cells: string[], dim?: boolean, color?: string) => (
+    // A model's name that opens its detail when pressed.
+    const pickable = (id: string, fam: string, label: string) => (
+      <Button key={id} plain onPress={() => pick(fam)}>
+        <Text color={famColor(fam)}>{sel === fam ? '▾' : '▸'} ■ </Text>
+        {label}
+      </Button>
+    )
+    const tableRow = (key: string, cells: string[], dim?: boolean, color?: string, first?: ReturnType<typeof pickable>) => (
       <Box key={key}>
         <Box flexGrow={1}>
-          <Text dimColor={dim} color={color}>
-            {cells[0]}
-          </Text>
+          {first ?? (
+            <Text dimColor={dim} color={color}>
+              {cells[0]}
+            </Text>
+          )}
         </Box>
         {cells.slice(1).map((c, i) => (
           <Box key={String(i)} width={8} justifyContent="flex-end">
@@ -1033,13 +1127,79 @@ export const register: Register = (on, options) => {
               </Text>
               <Text dimColor>⟳ {remaining(five.resetsAt, now)}</Text>
               <Box flexDirection="column" marginTop={1}>
-                {bd.byModel.map(m => line(m.model, `■ ${nameOf(m.model)}`, fmtPct(m.points), colorOf(m.model)))}
+                {bd.fams.map(m => (
+                  <Box key={`l-${m.fam}`} justifyContent="space-between">
+                    {pickable(`pick-legend-${m.fam}`, m.fam, m.label)}
+                    <Text bold>{fmtPct(m.points)}</Text>
+                  </Box>
+                ))}
                 {line('unseen', `▒ ${unseen >= 0 ? t('unseen') : t('over')}`, fmtPct(Math.abs(unseen)), 'inactive')}
                 {line('total', t('limitIs'), fmtPct(five.percentUsed), undefined, true)}
+                <Text dimColor>{t('clickHint')}</Text>
               </Box>
             </Box>
           )}
         </Box>
+
+        {five && left && (
+          <Box {...card}>
+            <Text bold color="claude">
+              {t('leftHead')} <Text dimColor>({fmtPct(left.rem)} {t('ofLimit')})</Text>
+            </Text>
+            <Box flexDirection="column" marginTop={1}>
+              {tableRow('lhead', [t('model'), t('colWeighted'), t('onlyOutput'), t('colCalls')], true)}
+              {left.rows.map(r =>
+                tableRow(
+                  `left-${r.fam}`,
+                  [r.label, compact(r.weighted), compact(r.output), r.calls === null ? '—' : `~${compact(r.calls)}`],
+                  false,
+                  undefined,
+                  pickable(`pick-left-${r.fam}`, r.fam, r.label),
+                ),
+              )}
+              <Text dimColor>{t('leftNote')}</Text>
+            </Box>
+          </Box>
+        )}
+
+        {five && detail && (
+          <Box {...card}>
+            <Box justifyContent="space-between">
+              <Text bold color={famColor(detail.fam)}>
+                {t('detailHead')} · {byFamily(list, weight).find(f => f.fam === detail.fam)?.label ?? familyName(detail.fam)}
+              </Text>
+              <Button key="close-detail" plain dimColor onPress={() => pick(detail.fam)}>
+                {t('close')} ✕
+              </Button>
+            </Box>
+            <Box flexDirection="column" marginTop={1}>
+              {detail.calls === 0 ? (
+                <Text dimColor>{t('noCallsOf')}</Text>
+              ) : (
+                <Box flexDirection="column">
+                  {line('dsum', `${fmtPct(detail.points)} ${t('ofLimit')} · ${detail.calls} ${t('calls')}`, `${compact(detail.weighted)} ${t('colWeighted')}`, undefined, true)}
+                  {tableRow('dhead', wide ? [t('colType'), t('colTokens'), t('colWeight'), t('colWeighted'), '%'] : [t('colType'), t('colTokens'), t('colWeighted'), '%'], true)}
+                  {detail.rows.map(r =>
+                    tableRow(
+                      `d-${r.key}`,
+                      wide
+                        ? [rowLabel(r.key), compact(r.tokens), `×${fmtW(r.weight)}`, compact(r.weighted), fmtPct(r.weighted * detail.th)]
+                        : [rowLabel(r.key), compact(r.tokens), compact(r.weighted), fmtPct(r.weighted * detail.th)],
+                    ),
+                  )}
+                  <Text color="inactive" wrap="truncate">
+                    {'─'.repeat(200)}
+                  </Text>
+                  {line('dtotal', t('totalWeighted'), `${compact(detail.weighted)} = ${fmtPct(detail.points)}`, undefined, true)}
+                </Box>
+              )}
+              <Text dimColor>
+                1% = {compact(1 / detail.th)} {t('weightedOf')} {familyName(detail.fam)} · {t('leftIn')} {fmtPct(left?.rem ?? 0)} ≈{' '}
+                {compact((left?.rem ?? 0) / detail.th)}
+              </Text>
+            </Box>
+          </Box>
+        )}
 
         {five && list.length > 0 && (
           <Box {...card}>
@@ -1049,19 +1209,22 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column" marginTop={1}>
               {tableRow('head', [t('colType'), t('colTokens'), t('colWeight'), t('colWeighted')], true)}
               {bd.rows.map(r => tableRow(r.key, [rowLabel(r.key), compact(r.tokens), `×${fmtW(r.weight)}`, compact(r.weighted)]))}
-              <Text color="inactive">{'─'.repeat(inner)}</Text>
+              <Text color="inactive" wrap="truncate">
+                {'─'.repeat(200)}
+              </Text>
               {line('sum', t('totalWeighted'), compact(bd.weighted), undefined, true)}
               {line('div', `÷ ${compact(bd.perPoint)} ${t('perOne')}`, `= ${fmtPct(bd.seen)} ${t('seen')}`)}
               {line('unseen', unseen >= 0 ? `+ ${t('unseen')}` : `− ${t('over')}`, `= ${fmtPct(Math.abs(unseen))}`)}
               {line('limit', t('limitIs'), fmtPct(five.percentUsed), undefined, true)}
               <Box flexDirection="column" marginTop={1}>
                 {tableRow('mhead', [t('perModel'), t('colWeighted'), '%'], true)}
-                {bd.byModel.map(m =>
+                {bd.fams.map(m =>
                   tableRow(
-                    m.model,
-                    [`■ ${nameOf(m.model)}`, compact(m.points / thetaOf(familyOf(m.model))), fmtPct(m.points)],
+                    `row-${m.fam}`,
+                    [m.label, compact(m.points / thetaOf(m.fam)), fmtPct(m.points)],
                     false,
-                    colorOf(m.model),
+                    undefined,
+                    pickable(`pick-table-${m.fam}`, m.fam, m.label),
                   ),
                 )}
               </Box>

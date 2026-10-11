@@ -8,6 +8,8 @@ The panel is built so you can check the arithmetic yourself:
 
 - **5-hour limit** – the bar is made of what each model took, in its colour, then a grey part for what the mod did not see (claude.ai, another computer, another tool), then what is left. Under it: each model's share, the share not seen, and `= 5-hour limit 43%`.
 - **What it is made of** – a table of the calls in the window: for output, cache written, input and cache read, the tokens, their weight (×5, ×1.25, ×1, ×0.03) and the weighted tokens; then `weighted total ÷ tokens per 1% = % seen`, `+ not seen`, `= 5-hour limit`. Below it, each model with its weighted tokens and its share.
+- **What you have left** – for Opus, Sonnet, Haiku and any other model seen, what is left of the 5-hour limit in weighted tokens, in output tokens (if it were all output) and in calls at the average cost of that model's calls in this window.
+- **Detail of a model** – press a model's name (in the bar's legend, in the tables, or in "what you have left") and a card opens with that model alone: its output, cache written, input and cache read, each with its tokens, weight, weighted tokens and share of the limit, and what 1% and what is left are worth in its tokens. Press it again, or "close", to shut it.
 - **How it is worked out** – for Opus, Sonnet, Haiku and any other model seen, what 1% and the whole window are worth in weighted tokens; the precision (±%, how many crossings) and whether the limits look steady.
 - **Week** (and a gateway's spend limit) – a bar with the percentage and the reset.
 - **Calls** – a bar chart of the calls in the window, each bar's height in % of the limit and its colour the model that weighed most; the last call, how many calls, and the session cost.

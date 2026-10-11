@@ -11,6 +11,6 @@ export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-chart': { turns: Turn[]; limits: Limit[]; cost: number | null; cacheWeight: number }
+    'token-chart': { turns: Turn[]; limits: Limit[]; cost: number | null; cacheWeight: number; selected: string }
   }
 }

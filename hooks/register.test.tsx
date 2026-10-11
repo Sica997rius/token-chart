@@ -319,6 +319,49 @@ describe('token-chart', () => {
     }
   })
 
+  test('mostra i token rimanenti per ogni modello, anche per quelli non usati', async ($: any, on: any) => {
+    const play = setup(on)
+    on('session.measure', (_: any, e: any) => ({ changed: e.changed }))
+    const resetsAt = new Date(3 * 3600 * 1000).toISOString()
+    // 108k token Sonnet di input = 1% con i valori iniziali; il limite è al 40%, quindi restano 60%
+    await play($, usage('claude-sonnet-5-5', 108000, 0, 0, 0))
+    await $.session.measure({ context: {}, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt }], changed: ['rateLimits'] })
+    const r = await $.command.run({ command: 'token-chart' })
+    // Sonnet: 60 x 108k = 6.5M pesati, 1.3M se fosse tutto output; Opus pesa 1.5x, Haiku 0.07x
+    expect(r.text).toContain('Quanto ti resta (60% del limite)')
+    expect(r.text).toContain('Sonnet 5.5 6.5M pesati (≈ 1.3M solo output, ~60 chiamate)')
+    expect(r.text).toContain('Opus 4.3M pesati')
+    expect(r.text).toContain('Haiku 92.6M pesati')
+    const ui = await mountPane($, 'terminal')
+    expect(await ui.find({ type: 'Text', text: /QUANTO TI RESTA/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`toccare un modello apre il suo dettaglio e toccarlo ancora lo chiude (${surface})`, async ($: any, on: any) => {
+      const play = setup(on)
+      on('session.measure', (_: any, e: any) => ({ changed: e.changed }))
+      const resetsAt = new Date(3 * 3600 * 1000).toISOString()
+      await play($, usage('claude-sonnet-5-5', 54000, 2000, 10000, 100000))
+      await play($, usage('claude-opus-5-5', 20000, 1000, 5000, 400000))
+      await $.session.measure({ context: {}, rateLimits: [{ kind: 'five_hour', percentUsed: 5, resetsAt }], changed: ['rateLimits'] })
+      const ui = await mountPane($, surface)
+      // nessun dettaglio aperto all'inizio
+      expect(await ui.find({ type: 'Text', text: /DETTAGLIO/ })).toBeUndefined()
+      await ui.press({ key: 'pick-legend-opus' })
+      expect(await ui.find({ type: 'Text', text: /DETTAGLIO · Opus 5\.5/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /1% = 72\.\dk token pesati Opus/ })).toBeDefined()
+      // un altro modello sostituisce il dettaglio
+      await ui.press({ key: 'pick-table-sonnet' })
+      expect(await ui.find({ type: 'Text', text: /DETTAGLIO · Sonnet 5\.5/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /DETTAGLIO · Opus/ })).toBeUndefined()
+      // lo stesso modello di nuovo: si chiude
+      await ui.press({ key: 'pick-left-sonnet' })
+      expect(await ui.find({ type: 'Text', text: /DETTAGLIO/ })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
   test('senza abbonamento non mostra percentuali inventate', async ($: any, on: any) => {
     const play = setup(on)
     await play($, usage('claude-sonnet-5-5', 1000, 100, 0, 0))
