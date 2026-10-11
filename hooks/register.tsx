@@ -274,6 +274,35 @@ const TEXT = {
     used: 'consumati',
     perModel: 'per modello',
     unavailable: 'n/d',
+    limit5: '◆ LIMITE 5 ORE',
+    seen: 'visti dalla mod',
+    model: 'modello',
+    unseen: 'non visti (claude.ai, altri PC…)',
+    over: 'stima sopra il reale',
+    partsHead: '◆ DI COSA È FATTO',
+    colType: 'tipo',
+    colTokens: 'token',
+    colWeight: 'peso',
+    colWeighted: 'pesati',
+    totalWeighted: 'totale pesati',
+    perOne: 'per 1%',
+    limitIs: '= limite 5 ore',
+    worth: 'vale',
+    estHead: '◆ COME LO CALCOLA',
+    onePct: '1% del limite =',
+    weightedOf: 'token pesati',
+    fullWindow: 'finestra intera ≈',
+    precision: 'precisione',
+    measures: 'misure',
+    stable: 'limiti stabili',
+    changed: '⚠ i limiti sembrano cambiati',
+    driftWait: 'controllo dei cambi dopo',
+    priorShort: 'valori iniziali (piano Pro): si adattano dalla prima misura',
+    callsHead: '◆ CHIAMATE · FINESTRA 5 ORE',
+    perBar: '% del limite per barra',
+    callsIn: 'chiamate nella finestra',
+    howTo: 'Come si arriva al',
+    madeOf: 'Di cosa è fatto',
     reliability: 'affidabilità della stima',
     drift: 'variazione recente rispetto ai pesi appresi',
     driftNone: 'variazione recente: n/d, servono almeno',
@@ -328,6 +357,35 @@ const TEXT = {
     used: 'used',
     perModel: 'per model',
     unavailable: 'n/a',
+    limit5: '◆ 5-HOUR LIMIT',
+    seen: 'seen by the mod',
+    model: 'model',
+    unseen: 'not seen (claude.ai, other PCs…)',
+    over: 'estimate above the limit',
+    partsHead: '◆ WHAT IT IS MADE OF',
+    colType: 'type',
+    colTokens: 'tokens',
+    colWeight: 'weight',
+    colWeighted: 'weighted',
+    totalWeighted: 'weighted total',
+    perOne: 'per 1%',
+    limitIs: '= 5-hour limit',
+    worth: 'is worth',
+    estHead: '◆ HOW IT IS WORKED OUT',
+    onePct: '1% of the limit =',
+    weightedOf: 'weighted tokens',
+    fullWindow: 'whole window ≈',
+    precision: 'precision',
+    measures: 'crossings',
+    stable: 'limits steady',
+    changed: '⚠ the limits seem to have changed',
+    driftWait: 'change check after',
+    priorShort: 'starting values (Pro plan): they adapt from the first crossing',
+    callsHead: '◆ CALLS · 5-HOUR WINDOW',
+    perBar: '% of the limit per bar',
+    callsIn: 'calls in the window',
+    howTo: 'How it adds up to',
+    madeOf: 'What it is made of',
     reliability: 'estimate reliability',
     drift: 'recent change against the learned weights',
     driftNone: 'recent change: n/a, needs at least',
@@ -392,7 +450,7 @@ const readTurns = async ($: EngineInterface) =>
 // than MAX_TURNS: the store holds 4 MiB in all.
 const KEEP_MS = 6 * 3600 * 1000
 const WINDOW_MS = 5 * 3600 * 1000
-const MAX_TURNS = 8000
+const MAX_TURNS = 3000
 const STALE_MS = 24 * 3600 * 1000
 const prune = (list: Turn[], now: number) => list.filter(x => x.at >= now - KEEP_MS).slice(-MAX_TURNS)
 
@@ -496,6 +554,34 @@ const weightsText = (list: Turn[]) => {
   return [`Sonnet 1% ≈ ${compact(1 / thetaOf('sonnet'))}`, ...others, `n=${FIT.n}`].join(' · ')
 }
 
+const fmtPct = (v: number) => `${(Math.round(v * 10) / 10).toFixed(Math.abs(v) >= 10 ? 0 : 1)}%`
+
+type RowKey = 'output' | 'cacheWrite' | 'input' | 'cacheRead'
+const rowLabel = (key: RowKey) =>
+  key === 'cacheWrite' ? t('cacheWritten') : key === 'cacheRead' ? t('cacheRead') : key
+
+// How the calls seen add up to a share of the limit, in the tokens of the family that weighs most
+// (another family's tokens are converted into it by the ratio of their weights).
+const breakdownOf = (list: Turn[], w: number) => {
+  const byModel = [...sumByModel(list, w).entries()]
+    .map(([model, o]) => ({ model, points: o.points, tokens: o.tokens }))
+    .sort((a, b) => b.points - a.points)
+  const ref = familyOf(byModel[0]?.model ?? 'sonnet')
+  const k = (x: Turn) => thetaOf(familyOf(x.model)) / thetaOf(ref)
+  const sum = (f: (x: Turn) => number) => list.reduce((a, x) => a + f(x), 0)
+  const rows: { key: RowKey; tokens: number; weight: number; weighted: number }[] = [
+    { key: 'output', tokens: sum(x => x.output), weight: 5, weighted: sum(x => k(x) * 5 * x.output) },
+    { key: 'cacheWrite', tokens: sum(x => x.cacheWrite), weight: 1.25, weighted: sum(x => k(x) * 1.25 * x.cacheWrite) },
+    { key: 'input', tokens: sum(x => x.input), weight: 1, weighted: sum(x => k(x) * x.input) },
+    { key: 'cacheRead', tokens: sum(x => x.cacheRead), weight: w, weighted: sum(x => k(x) * w * x.cacheRead) },
+  ]
+  const weighted = rows.reduce((a, r) => a + r.weighted, 0)
+  const perPoint = 1 / thetaOf(ref)
+  const others = [...new Set(list.map(x => familyOf(x.model)))].filter(f => f !== ref)
+
+  return { ref, perPoint, rows, weighted, seen: weighted / perPoint, byModel, others }
+}
+
 const safeSet = async ($: EngineInterface, key: string, value: unknown) => {
   try {
     await $.store.set(key, value)
@@ -530,6 +616,29 @@ const accKey = async ($: EngineInterface) => {
   ownKey = `acc:${id}`
 
   return ownKey
+}
+
+// The calls of each chat are kept under a key of their own too, and the panel puts them together,
+// so every chat shows the calls of all of them.
+const turnsKey = async ($: EngineInterface) => (await accKey($)).replace(/^acc:/, 'turns:')
+const turnId = (t: Turn) => `${t.at}:${t.model}:${t.tokens}`
+
+const readAllTurns = async ($: EngineInterface) => {
+  const own = await readTurns($)
+  const mine = await turnsKey($)
+  const seen = new Set(own.map(turnId))
+  const all = [...own]
+  for (const key of await $.store.keys()) {
+    if ((key !== 'turns' && !key.startsWith('turns:')) || key === mine) continue
+    const v = await $.store.get(key)
+    for (const t of Array.isArray(v) ? v.filter(isTurn) : []) {
+      if (seen.has(turnId(t))) continue
+      seen.add(turnId(t))
+      all.push(t)
+    }
+  }
+
+  return all.sort((a, b) => a.at - b.at)
 }
 
 const sumAcc = async ($: EngineInterface) => {
@@ -600,6 +709,12 @@ const tidy = async ($: EngineInterface) => {
     changed = true
   }
   if (changed) await safeSet($, 'acc:archive', { x: archive })
+  const mine = await turnsKey($)
+  for (const key of await $.store.keys()) {
+    if ((key !== 'turns' && !key.startsWith('turns:')) || key === mine) continue
+    const v = await $.store.get(key)
+    if (!(Array.isArray(v) ? v.filter(isTurn) : []).some(t => t.at >= now - KEEP_MS)) await $.store.delete(key)
+  }
   for (const key of ['samples', 'readings', 'learned']) {
     if ((await $.store.get(key)) !== undefined) await $.store.delete(key)
   }
@@ -628,7 +743,7 @@ export const register: Register = (on, options) => {
       // the summary is then reached through the panel alone
     }
     const now = await $.clock.now()
-    const saved = await $.store.get('turns')
+    const saved = await $.store.get(await turnsKey($))
     const restored = Array.isArray(saved) ? saved.filter(isTurn) : []
     await update($, turns, list => {
       const seen = new Set((list as unknown[]).filter(isTurn).map(t => `${t.at}:${t.model}:${t.tokens}`))
@@ -682,10 +797,20 @@ export const register: Register = (on, options) => {
     const opened = await $.ui.open({ id: PANE, title: t('title') })
     const windows = await read($, limits)
     const hasFive = windows.some(w => w.kind === 'five_hour')
-    const list = inWindow(await readTurns($), windows)
+    const list = inWindow(await readAllTurns($), windows)
     const spent = await read($, cost)
     const weight = await read($, cacheWeight)
     const now = await $.clock.now()
+    const five = windows.find(w => w.kind === 'five_hour')
+    const bd = breakdownOf(list, weight)
+    const how = five
+      ? [
+          `${t('howTo')} ${fmtPct(five.percentUsed)}: ${t('seen')} ${fmtPct(bd.seen)} (${bd.byModel.map(m => `${nameOf(m.model)} ${fmtPct(m.points)}`).join(' · ')}) + ${t('unseen')} ${fmtPct(five.percentUsed - bd.seen)}`,
+          `${t('madeOf')} (${t('weightedOf')} ${familyName(bd.ref)}): ${bd.rows
+            .map(r => `${rowLabel(r.key)} ${compact(r.tokens)} ×${fmtW(r.weight)} = ${compact(r.weighted)}`)
+            .join(' · ')} · ${t('totalWeighted')} ${compact(bd.weighted)} ÷ ${compact(bd.perPoint)} ${t('perOne')} = ${fmtPct(bd.seen)}`,
+        ]
+      : []
     const lines = windows.map(
       w => `${nameOfLimit(w.kind)}: ${Math.round(w.percentUsed)}% · ${remaining(w.resetsAt, now)}`,
     )
@@ -702,6 +827,7 @@ export const register: Register = (on, options) => {
       text: [
         head,
         ...(hasFive ? lines : [...lines, t('noLimits')]),
+        ...how,
         `${t('summary')}: ${compact(total)} / ${list.length} ${t('calls')}`,
         `${t('spent')}: ${money(spent)}`,
         `${t('cacheShare')}: ${fmtW(weight)} (${cacheShare(list, weight)}%)`,
@@ -736,7 +862,8 @@ export const register: Register = (on, options) => {
       await safeSet($, key, { at: turn.at, x: mine })
       await update($, turns, list => prune([...(list as unknown[]).filter(isTurn), turn], turn.at))
       const list = await readTurns($)
-      if (!(await safeSet($, 'turns', list))) await safeSet($, 'turns', list.slice(-(list.length >> 1)))
+      const listKey = await turnsKey($)
+      if (!(await safeSet($, listKey, list))) await safeSet($, listKey, list.slice(-(list.length >> 1)))
       $.ui.invalidate('ui.render')
     }
 
@@ -810,153 +937,221 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const windows = await read($, limits)
-    const hasFive = windows.some(w => w.kind === 'five_hour')
-    const list = inWindow(await readTurns($), windows)
+    const five = windows.find(w => w.kind === 'five_hour')
+    const others = windows.filter(w => w.kind !== 'five_hour')
+    const list = inWindow(await readAllTurns($), windows)
     const spent = await read($, cost)
     const weight = await read($, cacheWeight)
     const now = await $.clock.now()
     const inner = Math.max(12, (e.props.bodyColumns ?? 34) - 4)
     const barWidth = Math.max(8, inner - 6)
+    const bd = breakdownOf(list, weight)
+    const unseen = five ? five.percentUsed - bd.seen : 0
+    const valueOf = (x: Turn) => (five ? pointsOfTurn(x, weight) : x.tokens)
+    const show = (v: number) => (five ? fmtPct(v) : `${compact(v)} ${t('tokenUnit')}`)
+
+    // The 5-hour bar is made of what each model took, then what the mod did not see.
+    const segments: { key: string; text: string; color: string }[] = []
+    let filled = 0
+    for (const m of bd.byModel) {
+      const n = Math.min(barWidth - filled, Math.round((m.points / 100) * barWidth))
+      if (n > 0) segments.push({ key: m.model, text: '█'.repeat(n), color: colorOf(m.model) })
+      filled += Math.max(0, n)
+    }
+    const unseenCells = five ? Math.max(0, Math.min(barWidth, Math.round((five.percentUsed / 100) * barWidth)) - filled) : 0
+
+    // Calls grouped into bars, each bar coloured by the model that weighed most in it.
     const bucket = Math.max(1, Math.ceil(list.length / inner))
-    const recent: { tokens: number; model: string }[] = []
+    const bars: { value: number; model: string }[] = []
     for (let i = 0; i < list.length; i += bucket) {
       const group = list.slice(i, i + bucket)
-      const byTokens = new Map<string, number>()
-      for (const g of group) byTokens.set(g.model, (byTokens.get(g.model) ?? 0) + g.tokens)
-      const model = [...byTokens.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
-      recent.push({ tokens: group.reduce((a, b) => a + b.tokens, 0), model })
+      const byValue = new Map<string, number>()
+      for (const g of group) byValue.set(g.model, (byValue.get(g.model) ?? 0) + valueOf(g))
+      const model = [...byValue.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? ''
+      bars.push({ value: group.reduce((x, g) => x + valueOf(g), 0), model })
     }
-    const peak = Math.max(1, ...recent.map(t => t.tokens))
-    const sum = list.reduce((a, b) => a + b.tokens, 0)
-    const byModel = sumByModel(list, weight)
+    const peak = Math.max(1e-9, ...bars.map(b => b.value))
     const last = list[list.length - 1]
-    const current = last?.model
-    const rows = Array.from({ length: CHART_ROWS }, (_, r) => r)
-
     const cell = (v: number, r: number) => {
       const level = Math.round((v / peak) * CHART_ROWS * 8)
       const left = level - (CHART_ROWS - 1 - r) * 8
 
       return left <= 0 ? ' ' : left >= 8 ? '█' : BLOCKS[left - 1]
     }
+    const rows = Array.from({ length: CHART_ROWS }, (_, r) => r)
+    const line = (key: string, label: string, value: string, color?: string, bold?: boolean) => (
+      <Box key={key} justifyContent="space-between">
+        <Text color={color}>{label}</Text>
+        <Text bold={bold}>{value}</Text>
+      </Box>
+    )
+    const tableRow = (key: string, cells: string[], dim?: boolean, color?: string) => (
+      <Box key={key}>
+        <Box flexGrow={1}>
+          <Text dimColor={dim} color={color}>
+            {cells[0]}
+          </Text>
+        </Box>
+        {cells.slice(1).map((c, i) => (
+          <Box key={String(i)} width={8} justifyContent="flex-end">
+            <Text dimColor={dim} bold={!dim && i === cells.length - 2}>
+              {c}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+    )
+    // Every model the fit knows or the window used: what 1% and the whole window are worth in it.
+    const families = [...new Set(['opus', 'sonnet', 'haiku', ...bd.others, bd.ref])]
+    const card = { flexDirection: 'column', borderStyle: 'round', borderColor: 'subtle', paddingX: 1 } as const
 
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
-          <Text bold color="claude">
-            {t('limitsHead')}
-          </Text>
-          {!hasFive && <Text dimColor>{t('noLimits')}</Text>}
-          {windows.map(w => {
-            const state = status(w.percentUsed)
+        <Box {...card}>
+          <Box justifyContent="space-between">
+            <Text bold color="claude">
+              {five ? t('limit5') : t('limitsHead')}
+            </Text>
+            {five && (
+              <Text color={status(five.percentUsed).color} bold>
+                {status(five.percentUsed).label}
+              </Text>
+            )}
+          </Box>
+          {!five && <Text dimColor>{t('noLimits')}</Text>}
+          {five && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text>
+                {segments.map(sg => (
+                  <Text key={sg.key} color={sg.color}>
+                    {sg.text}
+                  </Text>
+                ))}
+                <Text color="inactive">{'▒'.repeat(unseenCells)}</Text>
+                <Text color="inactive">{'░'.repeat(Math.max(0, barWidth - filled - unseenCells))}</Text>
+                <Text bold> {fmtPct(five.percentUsed)}</Text>
+              </Text>
+              <Text dimColor>⟳ {remaining(five.resetsAt, now)}</Text>
+              <Box flexDirection="column" marginTop={1}>
+                {bd.byModel.map(m => line(m.model, `■ ${nameOf(m.model)}`, fmtPct(m.points), colorOf(m.model)))}
+                {line('unseen', `▒ ${unseen >= 0 ? t('unseen') : t('over')}`, fmtPct(Math.abs(unseen)), 'inactive')}
+                {line('total', t('limitIs'), fmtPct(five.percentUsed), undefined, true)}
+              </Box>
+            </Box>
+          )}
+        </Box>
 
-            return (
-              <Box key={w.kind} flexDirection="column" marginTop={1}>
-                <Box justifyContent="space-between">
-                  <Text bold>{nameOfLimit(w.kind)}</Text>
-                  <Text color={state.color} bold>
-                    {state.label}
-                  </Text>
-                </Box>
-                <Text>
-                  <Text color={state.color}>{bar(w.percentUsed, barWidth).filled}</Text>
-                  <Text color="inactive">{bar(w.percentUsed, barWidth).empty}</Text>
-                  <Text bold> {String(Math.round(w.percentUsed)).padStart(3)}%</Text>
-                </Text>
-                <Text dimColor>⟳ {remaining(w.resetsAt, now)}</Text>
-                {w.kind === 'five_hour' && <Text dimColor>{estimateText(list)}</Text>}
-                {w.kind === 'five_hour' && (
-                  <Text dimColor>
-                    {t('reliability')} {reliabilityText()}
-                  </Text>
-                )}
-                {w.kind === 'five_hour' && (
-                  <Text color={isDriftAlarm() ? 'warning' : undefined} dimColor={!isDriftAlarm()}>
-                    {driftText()}
-                  </Text>
+        {five && list.length > 0 && (
+          <Box {...card}>
+            <Text bold color="claude">
+              {t('partsHead')} <Text dimColor>({t('weightedOf')} {familyName(bd.ref)})</Text>
+            </Text>
+            <Box flexDirection="column" marginTop={1}>
+              {tableRow('head', [t('colType'), t('colTokens'), t('colWeight'), t('colWeighted')], true)}
+              {bd.rows.map(r => tableRow(r.key, [rowLabel(r.key), compact(r.tokens), `×${fmtW(r.weight)}`, compact(r.weighted)]))}
+              <Text color="inactive">{'─'.repeat(inner)}</Text>
+              {line('sum', t('totalWeighted'), compact(bd.weighted), undefined, true)}
+              {line('div', `÷ ${compact(bd.perPoint)} ${t('perOne')}`, `= ${fmtPct(bd.seen)} ${t('seen')}`)}
+              {line('unseen', unseen >= 0 ? `+ ${t('unseen')}` : `− ${t('over')}`, `= ${fmtPct(Math.abs(unseen))}`)}
+              {line('limit', t('limitIs'), fmtPct(five.percentUsed), undefined, true)}
+              <Box flexDirection="column" marginTop={1}>
+                {tableRow('mhead', [t('perModel'), t('colWeighted'), '%'], true)}
+                {bd.byModel.map(m =>
+                  tableRow(
+                    m.model,
+                    [`■ ${nameOf(m.model)}`, compact(m.points / thetaOf(familyOf(m.model))), fmtPct(m.points)],
+                    false,
+                    colorOf(m.model),
+                  ),
                 )}
               </Box>
-            )
-          })}
-          <Box justifyContent="space-between" marginTop={1}>
-            <Text dimColor>{t('sessionCost')}</Text>
-            <Text bold>{money(spent)}</Text>
+              {bd.others.map(f => (
+                <Text key={f} dimColor>
+                  1 token {familyName(f)} {t('worth')} {(thetaOf(f) / thetaOf(bd.ref)).toFixed(2)} token {familyName(bd.ref)}
+                </Text>
+              ))}
+            </Box>
+          </Box>
+        )}
+
+        <Box {...card}>
+          <Text bold color="claude">
+            {t('estHead')}
+          </Text>
+          <Box flexDirection="column" marginTop={1}>
+            <Text dimColor>{t('weightedOf')}:</Text>
+            {tableRow('fhead', [t('model'), '1%', '100%'], true)}
+            {families.map(f =>
+              tableRow(f, [`■ ${familyName(f)}`, compact(1 / thetaOf(f)), compact(100 / thetaOf(f))], false, FAMILIES[f] ?? 'suggestion'),
+            )}
+            {FIT.n === 0 ? (
+              <Text dimColor>{t('prior')}: {t('priorShort')}</Text>
+            ) : (
+              <Text dimColor>
+                {t('precision')} ±{spreadNow()}% · {FIT.n} {t('measures')}
+                {FIT.used < FIT.n ? ` · ${t('dropped')} ${FIT.n - FIT.used}` : ''}
+              </Text>
+            )}
+            {FIT.drift === null || FIT.driftBand === null ? (
+              <Text dimColor>
+                {t('driftWait')} {DRIFT_MIN_N} {t('measures')} ({FIT.n}/{DRIFT_MIN_N})
+              </Text>
+            ) : (
+              <Text color={isDriftAlarm() ? 'warning' : 'success'}>
+                {isDriftAlarm() ? t('changed') : `✓ ${t('stable')}`} ({signed(FIT.drift)})
+              </Text>
+            )}
           </Box>
         </Box>
 
-        <Box flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
+        {others.map(w => (
+          <Box key={w.kind} {...card}>
+            <Box justifyContent="space-between">
+              <Text bold>{nameOfLimit(w.kind)}</Text>
+              <Text color={status(w.percentUsed).color} bold>
+                {status(w.percentUsed).label}
+              </Text>
+            </Box>
+            <Text>
+              <Text color={status(w.percentUsed).color}>{bar(w.percentUsed, barWidth).filled}</Text>
+              <Text color="inactive">{bar(w.percentUsed, barWidth).empty}</Text>
+              <Text bold> {fmtPct(w.percentUsed)}</Text>
+            </Text>
+            <Text dimColor>⟳ {remaining(w.resetsAt, now)}</Text>
+          </Box>
+        ))}
+
+        <Box {...card}>
           <Text bold color="claude">
-            {t('chartHead')}
+            {t('callsHead')}
           </Text>
           {list.length === 0 ? (
             <Text dimColor>{t('noTurns')}</Text>
           ) : (
             <Box flexDirection="column" marginTop={1}>
               <Text dimColor>
-                {t('axisY')} · 0–{compact(peak)}
+                {five ? t('perBar') : t('axisY')} · 0–{show(peak)}
               </Text>
               {rows.map(r => (
                 <Box key={String(r)}>
-                  {recent.map((t, i) => (
-                    <Text key={String(i)} color={colorOf(t.model)} bold={i === recent.length - 1}>
-                      {cell(t.tokens, r)}
+                  {bars.map((b, i) => (
+                    <Text key={String(i)} color={colorOf(b.model)} bold={i === bars.length - 1}>
+                      {cell(b.value, r)}
                     </Text>
                   ))}
                 </Box>
               ))}
-              <Text color="inactive">{'─'.repeat(Math.max(1, recent.length))}</Text>
+              <Text color="inactive">{'─'.repeat(Math.max(1, bars.length))}</Text>
               <Text dimColor>
                 {t('axisX')} · 1 {t('bar')} = {bucket} {bucket === 1 ? t('call') : t('calls')}
               </Text>
-              <Box justifyContent="space-between">
-                <Text dimColor>{t('lastCall')}</Text>
-                <Text bold>
-                  {compact(last?.tokens ?? 0)} {t('tokenUnit')}
-                </Text>
-              </Box>
-              <Box justifyContent="space-between">
-                <Text dimColor>{t('maxBar')}</Text>
-                <Text bold>
-                  {compact(peak)} {t('tokenUnit')}
-                </Text>
-              </Box>
-              <Box justifyContent="space-between">
-                <Text dimColor>
-                  {t('used')} ({list.length} {t('calls')})
-                </Text>
-                <Text bold>
-                  {compact(sum)} {t('tokenUnit')}
-                </Text>
-              </Box>
-              <Box justifyContent="space-between">
-                <Text dimColor>
-                  {t('cacheShare')} {fmtW(weight)}
-                </Text>
-                <Text bold>{cacheShare(list, weight)}%</Text>
-              </Box>
-              <Box flexDirection="column" marginTop={1}>
-                <Text dimColor>{t('perModel')}</Text>
-                {[...byModel.entries()].map(([model, one]) => (
-                  <Box key={model} flexDirection="column">
-                    <Box justifyContent="space-between">
-                      <Text color={colorOf(model)} bold={model === current}>
-                        ■ {nameOf(model)}
-                        {model === current ? ' ←' : ''}
-                      </Text>
-                      <Text bold>
-                        {hasFive ? `~${one.points.toFixed(1)}% ` : ''}
-                        <Text dimColor>
-                          ({compact(one.tokens)} {t('tokenUnit')})
-                        </Text>
-                      </Text>
-                    </Box>
-                    <Text dimColor>
-                      in {compact(one.input)} · out {compact(one.output)} · cache {compact(one.cacheWrite)}+
-                      {compact(one.cacheRead)} {t('cacheRead')}
-                    </Text>
-                  </Box>
-                ))}
-              </Box>
+              {line('last', t('lastCall'), last ? show(valueOf(last)) : '—')}
+              {line('count', t('callsIn'), `(${list.length} ${t('calls')})`)}
+              {!five &&
+                [...sumByModel(list, weight).entries()].map(([model, one]) =>
+                  line(model, `■ ${nameOf(model)}`, `${compact(one.tokens)} ${t('tokenUnit')}`, colorOf(model)),
+                )}
+              {line('cost', t('sessionCost'), money(spent))}
             </Box>
           )}
         </Box>

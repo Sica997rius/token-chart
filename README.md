@@ -4,12 +4,16 @@ A side panel for Claude Code that shows how many tokens you use, split by model,
 
 ## What it shows
 
-- **Usage limits** – the 5-hour and 7-day windows (or a gateway's spend limit) as a bar, with the percentage used, a status (OK / HIGH / CRITICAL) and the time left until the reset.
-- **Tokens in the 5-hour window** – a bar chart of the model calls in the current window, coloured by model family (Fable yellow, Opus magenta, Sonnet cyan, Haiku green, any other family neutral), with last / tallest bar / total.
-- **Per model** – the share of the 5-hour limit each model has taken (`~x%`), and its input, output, cache written and cache read.
-- **Session cost** – in US dollars, as Claude Code totals it.
+The panel is built so you can check the arithmetic yourself:
 
-It updates after every model call, when you send a message, and every 15 seconds (for the reset countdown). The status line also shows `Session NN% · resets in …`.
+- **5-hour limit** – the bar is made of what each model took, in its colour, then a grey part for what the mod did not see (claude.ai, another computer, another tool), then what is left. Under it: each model's share, the share not seen, and `= 5-hour limit 43%`.
+- **What it is made of** – a table of the calls in the window: for output, cache written, input and cache read, the tokens, their weight (×5, ×1.25, ×1, ×0.03) and the weighted tokens; then `weighted total ÷ tokens per 1% = % seen`, `+ not seen`, `= 5-hour limit`. Below it, each model with its weighted tokens and its share.
+- **How it is worked out** – for Opus, Sonnet, Haiku and any other model seen, what 1% and the whole window are worth in weighted tokens; the precision (±%, how many crossings) and whether the limits look steady.
+- **Week** (and a gateway's spend limit) – a bar with the percentage and the reset.
+- **Calls** – a bar chart of the calls in the window, each bar's height in % of the limit and its colour the model that weighed most; the last call, how many calls, and the session cost.
+
+Every chat shows the same figures: the calls and the crossings of all chats are kept in one store.
+It updates after every model call, when you send a message, and every 15 seconds; the status line also shows `Session NN% · resets in …`.
 
 Without a 5-hour limit (an API key, Bedrock, Vertex, or before the first reading) the panel shows tokens and cost only: percentages would have nothing to rest on.
 

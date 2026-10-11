@@ -147,7 +147,7 @@ describe('token-chart', () => {
     expect(r.text).toContain('$1.23')
 
     const ui = await mountPane($, 'terminal')
-    expect(await ui.find({ type: 'Text', text: /LIMITI D'USO/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /LIMITE 5 ORE/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /stima iniziale/ })).toBeDefined()
     await ui.unmount()
   })
@@ -296,6 +296,27 @@ describe('token-chart', () => {
     expect(r.text).toContain('n=12')
     expect(perPointOf(r.text)).toBeGreaterThan(89000)
     expect(perPointOf(r.text)).toBeLessThan(91000)
+  })
+
+  test('il pannello mostra come i token visti e quelli non visti arrivano alla percentuale del limite', async ($: any, on: any) => {
+    const play = setup(on)
+    on('session.measure', (_: any, e: any) => ({ changed: e.changed }))
+    const resetsAt = new Date(3 * 3600 * 1000).toISOString()
+    // 108k token Sonnet di input valgono esattamente l'1% con i valori iniziali
+    await play($, usage('claude-sonnet-5-5', 108000, 0, 0, 0))
+    await $.session.measure({ context: {}, rateLimits: [{ kind: 'five_hour', percentUsed: 10, resetsAt }], changed: ['rateLimits'] })
+    const r = await $.command.run({ command: 'token-chart' })
+    expect(r.text).toContain('Come si arriva al 10%: visti dalla mod 1.0%')
+    expect(r.text).toContain('non visti (claude.ai, altri PC…) 9.0%')
+    expect(r.text).toContain('input 108.0k ×1 = 108.0k')
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await mountPane($, surface)
+      expect(await ui.find({ type: 'Text', text: /= 1\.0% visti dalla mod/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /= 9\.0%/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /= limite 5 ore/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /DI COSA È FATTO/ })).toBeDefined()
+      await ui.unmount()
+    }
   })
 
   test('senza abbonamento non mostra percentuali inventate', async ($: any, on: any) => {
