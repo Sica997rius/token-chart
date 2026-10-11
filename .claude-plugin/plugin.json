@@ -1,6 +1,6 @@
 {
   "name": "token-chart",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Side panel that shows token usage per model against your usage limits, and session cost",
   "types": "./types/index.d.ts",
   "author": {

@@ -289,6 +289,15 @@ describe('token-chart', () => {
     expect(perPointOf(r)).toBeLessThan(100000 * 1.15)
   })
 
+  test("i passaggi aggiunti da un'altra chat arrivano anche qui senza aspettare un passaggio nuovo", async ($: any, on: any) => {
+    // l'archivio condiviso contiene già 12 passaggi scritti da un'altra chat; questa non ha visto nulla
+    setup(on, { intervals: Array.from({ length: 12 }, () => ({ x: { sonnet: [90000, 0] }, dp: 1 })) })
+    const r = await $.command.run({ command: 'token-chart' })
+    expect(r.text).toContain('n=12')
+    expect(perPointOf(r.text)).toBeGreaterThan(89000)
+    expect(perPointOf(r.text)).toBeLessThan(91000)
+  })
+
   test('senza abbonamento non mostra percentuali inventate', async ($: any, on: any) => {
     const play = setup(on)
     await play($, usage('claude-sonnet-5-5', 1000, 100, 0, 0))

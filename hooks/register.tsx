@@ -543,12 +543,39 @@ const sumAcc = async ($: EngineInterface) => {
   return sum
 }
 
+// What the fit was last computed from: the crossings and the cache-weight setting in the store.
+let fitSource = ''
+
 const refit = async ($: EngineInterface) => {
   const manual = (await $.store.get('manualCache')) === true
   const saved = await $.store.get('cacheWeight')
   const fixed = manual && isNum(saved) ? saved : null
-  FIT = fitOf(intervalsFrom(await $.store.get('intervals')), fixed)
+  const raw = await $.store.get('intervals')
+  const list = intervalsFrom(raw)
+  FIT = fitOf(list, fixed)
+  fitSource = sourceOf(raw, manual, saved)
   await update($, cacheWeight, () => FIT.w)
+}
+
+const sourceOf = (raw: unknown, manual: boolean, saved: unknown) => {
+  const list = Array.isArray(raw) ? raw : []
+  const last = list[list.length - 1] as { end?: unknown; dp?: unknown } | undefined
+
+  return JSON.stringify([list.length, last?.end ?? null, last?.dp ?? null, manual, saved ?? null])
+}
+
+// Every chat shares one store: when another chat adds a crossing, or the store is rewritten, the
+// fit is computed again, so all panels show the same figures.
+const syncFit = async ($: EngineInterface) => {
+  const manual = (await $.store.get('manualCache')) === true
+  const saved = await $.store.get('cacheWeight')
+  if (sourceOf(await $.store.get('intervals'), manual, saved) !== fitSource) await refit($)
+}
+
+const onTick = async ($: EngineInterface) => {
+  await syncFit($)
+  await refreshStatus($)
+  $.ui.invalidate('ui.render')
 }
 
 // Data kept by version 1.0, and the totals of sessions gone for a day, are folded into one
@@ -586,6 +613,7 @@ export const register: Register = (on, options) => {
   lang = options.language === 'en' ? 'en' : 'it'
   const openOnStart = options.openOnStart !== 'no'
   FIT = priorFit(null)
+  fitSource = ''
   let tick: { cancel: () => void } | undefined
   ownKey = undefined
 
@@ -617,8 +645,7 @@ export const register: Register = (on, options) => {
     if (openOnStart) void $.ui.open({ id: PANE, title: t('title') })
     tick?.cancel()
     tick = $.clock.every(15000, () => {
-      void refreshStatus($)
-      $.ui.invalidate('ui.render')
+      void onTick($)
     })
 
     return next(e)
@@ -651,6 +678,7 @@ export const register: Register = (on, options) => {
       return { text: `${t('cacheSet')} ${value}` }
     }
 
+    await syncFit($)
     const opened = await $.ui.open({ id: PANE, title: t('title') })
     const windows = await read($, limits)
     const hasFive = windows.some(w => w.kind === 'five_hour')
