@@ -67,7 +67,7 @@ Then it **learns from your own use**. Each time the limit moves up by a point it
 - **A family never measured** (Fable, or a model that comes out later) gets a weight of its own, learned from scratch; it never lands on Sonnet's.
 - **The cache-read weight**, unless you fixed it by hand.
 
-On the Pro plan where the starting values were measured, the summary reads: `learned weights: Sonnet 1% ≈ 110k · Opus x1.48 · Haiku x0.07 · n=40`.
+On the Pro plan where the starting values were measured, the summary reads: `learned weights: Sonnet 1% ≈ 110k · Opus x1.52 · Haiku x0.07 · n=56` (October 2026).
 
 ## What the mod cannot see, and what it does about it
 
