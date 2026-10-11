@@ -1,4 +1,5 @@
 # token-chart
+
 A side panel for Claude Code that shows how many tokens you use, split by model, next to your usage limits and the session cost, and learns how much each model weighs on **your** 5-hour limit.
 
 ## What it shows
@@ -23,7 +24,15 @@ Without a 5-hour limit (an API key, Bedrock, Vertex, or before the first reading
 
 ## Install
 
-Replace `OWNER` in `homepage` and publish this folder as a repository; then `/plugin install token-chart --marketplace <owner>/<repo>`, or load the folder directly in a session:
+At the prompt of a Claude Code session in a terminal:
+
+```
+/plugin install token-chart --marketplace Sica997rius/token-chart
+```
+
+Answer `y` to add the marketplace, keep the user scope, and set the options. The mod is active at once, and in every session started after. `/plugin update token-chart` fetches a newer version.
+
+To run it from a copy of this folder instead:
 
 ```
 claude --plugin-dir <path-to>/token-chart
@@ -53,12 +62,12 @@ The mod starts from values measured on one account (Pro plan, October 2026: iden
 
 Then it **learns from your own use**. Each time the limit moves up by a point it stores how many tokens of each family and of cache read that took, and refits:
 
-- **The size of a point** depends on your plan (on Pro it is several times smaller than on Max, on Max 20x several times larger), so it is taken from your own crossings from the first one on, with nothing pulling it toward the value above. That value only fills in before your first crossing.
+- **The size of a point** depends on your plan (on Max it is several times larger than on Pro, where it was measured; on Max 20x larger still), so it is taken from your own crossings from the first one on, with nothing pulling it toward the value above. That value only fills in before your first crossing.
 - **The weight of each family** is pulled toward the measured ratios (Opus 1.5, Haiku 0.07) until your data says otherwise: a mix of models that varies little cannot tell the families apart, and the measured ratios carry over between plans better than the size of a point does.
 - **A family never measured** (Fable, or a model that comes out later) gets a weight of its own, learned from scratch; it never lands on Sonnet's.
 - **The cache-read weight**, unless you fixed it by hand.
 
-The summary lists for PRO plan what has been learned: `learned weights: Sonnet 1% ≈ 110k · Opus x1.48 · Haiku x0.07 · n=40`.
+On the Pro plan where the starting values were measured, the summary reads: `learned weights: Sonnet 1% ≈ 110k · Opus x1.48 · Haiku x0.07 · n=40`.
 
 ## What the mod cannot see, and what it does about it
 

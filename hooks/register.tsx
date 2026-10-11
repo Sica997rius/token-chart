@@ -8,7 +8,7 @@ const turns = atom({ plugin: 'token-chart', key: 'turns' } as const, [])
 const limits = atom({ plugin: 'token-chart', key: 'limits' } as const, [])
 const cost = atom({ plugin: 'token-chart', key: 'cost' } as const, null)
 
-// Measured on one account (Max plan, Oct 2026): one point of the 5-hour window was worth about 108k
+// Measured on one account (Pro plan, Oct 2026): one point of the 5-hour window was worth about 108k
 // "Sonnet tokens", a Sonnet token being input + 5 x output + 1.25 x cache written + w x cache read.
 // The size of a point depends on the plan (Pro, Max, Team...), so it is taken from the user's own
 // crossings from the first one on and this value only fills in before that. The ratios between
@@ -294,7 +294,7 @@ const TEXT = {
     cacheAuto: "Peso della cache letta: appreso dall'uso",
     cacheShare: 'peso cache letta',
     prior: 'stima iniziale',
-    priorNote: 'misurata su un piano Max, si adatta al tuo dal primo passaggio di punto',
+    priorNote: 'misurata su un piano Pro, si adatta al tuo dal primo passaggio di punto',
     cacheSet: 'Peso della cache letta impostato a',
     cacheBad: 'Uso: /token-chart cache <numero tra 0 e 1> | auto · /token-chart reset',
     resetDone: 'Dati della mod cancellati: si riparte dai valori iniziali.',
@@ -348,7 +348,7 @@ const TEXT = {
     cacheAuto: 'Cache-read weight: learned from use',
     cacheShare: 'cache-read weight',
     prior: 'initial estimate',
-    priorNote: 'measured on a Max plan, adapts to yours from the first point crossing',
+    priorNote: 'measured on a Pro plan, adapts to yours from the first point crossing',
     cacheSet: 'Cache-read weight set to',
     cacheBad: 'Usage: /token-chart cache <number between 0 and 1> | auto · /token-chart reset',
     resetDone: "The mod's data is cleared: back to the starting values.",
